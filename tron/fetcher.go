@@ -75,6 +75,8 @@ type TronClient struct {
 	Ch        chan Transaction
 	Mu        *sync.RWMutex
 	Contracts map[string]Contract
+	Ctx       context.Context
+	CancelCtx context.CancelFunc
 }
 
 type Transaction struct {
@@ -106,6 +108,10 @@ func Client(cfg *Config) (*TronClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	TronClient.Ctx = ctx
+	TronClient.CancelCtx = cancel
+
 	TronClient.Contracts = make(map[string]Contract)
 
 	return &TronClient, nil
@@ -147,8 +153,18 @@ func (c *TronClient) StopListener() {
 }
 func shirnk(c *TronClient, size int) {
 	for {
-		if len(c.Ch) > size {
-			<-c.Ch
+		select {
+		case <-c.Ctx.Done():
+			//fmt.Printf("Context done initWs\n")
+			return
+
+		default:
+
+			if len(c.Ch) > size {
+				for i := 0; i < len(c.Ch)-size; i++ {
+					<-c.Ch
+				}
+			}
 		}
 	}
 
@@ -182,76 +198,83 @@ func (c *TronClient) StartListener() (chan Transaction, error) {
 		}()
 
 		for {
-			if !c.ChStatus {
+			select {
+			case <-c.Ctx.Done():
+				//fmt.Printf("Context done initWs\n")
 				return
-			}
-			msgC, err := s.Recv()
-			if err != nil {
-				continue
-			}
-			msg := string(msgC.Frames[1])
 
-			if msg == "transactionTrigger" {
-				continue
-			}
-
-			go func(msg string) {
-				t := Transaction{}
-				contents := Message{}
-				if err := json.Unmarshal([]byte(msg), &contents); err != nil {
+			default:
+				if !c.ChStatus {
 					return
 				}
-				t.Type = 1
-				t.Raw = contents
-				t.TxId = contents.TransactionId
-				t.Contract = contents.ContractAddress
+				msgC, err := s.Recv()
+				if err != nil {
+					continue
+				}
+				msg := string(msgC.Frames[1])
 
-				if contents.ContractAddress == "" && contents.FromAddress != "" && contents.ToAddress != "" && contents.AssetAmount.Cmp(decimal.NewFromFloat(0)) != 0 {
-
-					t.Address = contents.FromAddress
-					t.AddressTo = contents.ToAddress
-					t.Amount = contents.AssetAmount
-					if !c.ChStatus {
-						return
-					}
-
-					c.Ch <- t
-					//return
-
-				} else {
-
-					c.Mu.RLock()
-					if len(c.Cfg.Contracts) == 0 || slices.Contains(c.Cfg.Contracts, contents.ContractAddress) {
-						c.Mu.RUnlock()
-
-						d, err := c.checkTransactionGrpc(contents.TransactionId)
-						if err != nil {
-							//log.Printf("Error checking transaction %s", err)
-							return
-						}
-
-						if d == nil {
-							return
-
-						} else {
-							t.Type = 2
-							t.Address = contents.FromAddress
-							t.AddressTo = d.AddressString
-							t.Amount = d.AmountFloat
-
-							if !c.ChStatus {
-								return
-							}
-							c.Ch <- t
-						}
-
-						return
-					}
-					c.Mu.RUnlock()
-					//return
+				if msg == "transactionTrigger" {
+					continue
 				}
 
-			}(msg)
+				go func(msg string) {
+					t := Transaction{}
+					contents := Message{}
+					if err := json.Unmarshal([]byte(msg), &contents); err != nil {
+						return
+					}
+					t.Type = 1
+					t.Raw = contents
+					t.TxId = contents.TransactionId
+					t.Contract = contents.ContractAddress
+
+					if contents.ContractAddress == "" && contents.FromAddress != "" && contents.ToAddress != "" && contents.AssetAmount.Cmp(decimal.NewFromFloat(0)) != 0 {
+
+						t.Address = contents.FromAddress
+						t.AddressTo = contents.ToAddress
+						t.Amount = contents.AssetAmount
+						if !c.ChStatus {
+							return
+						}
+
+						c.Ch <- t
+						//return
+
+					} else {
+
+						c.Mu.RLock()
+						if len(c.Cfg.Contracts) == 0 || slices.Contains(c.Cfg.Contracts, contents.ContractAddress) {
+							c.Mu.RUnlock()
+
+							d, err := c.checkTransactionGrpc(contents.TransactionId)
+							if err != nil {
+								//log.Printf("Error checking transaction %s", err)
+								return
+							}
+
+							if d == nil {
+								return
+
+							} else {
+								t.Type = 2
+								t.Address = contents.FromAddress
+								t.AddressTo = d.AddressString
+								t.Amount = d.AmountFloat
+
+								if !c.ChStatus {
+									return
+								}
+								c.Ch <- t
+							}
+
+							return
+						}
+						c.Mu.RUnlock()
+						//return
+					}
+
+				}(msg)
+			}
 		}
 	}(c, s)
 	return nil, nil

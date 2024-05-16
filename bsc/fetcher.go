@@ -9,6 +9,7 @@ import (
 		"github.com/sirupsen/logrus"
 	*/
 
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -119,46 +120,53 @@ func (c *BscClient) initWs() error {
 
 	for {
 		var response ResponseMessage
+		select {
+		case <-c.Ctx.Done():
+			//fmt.Printf("Context done initWs\n")
+			return nil
 
-		_, message, err := c.WSC.ReadMessage()
-		if err != nil {
+		default:
 
-			return err
-		}
-
-		go func(message []byte) error {
-			//	fmt.Printf("Message: %s\n", message)
-			err = json.Unmarshal(message, &response)
+			_, message, err := c.WSC.ReadMessage()
 			if err != nil {
-				return fmt.Errorf("Could not decode message/parse json: %v, message %s", err, message)
-			}
-			if response.Params.Result == nil {
 
-				return nil
+				return err
 			}
 
-			if response.Params.Subscription == subHashTransactions {
-				txHash := response.Params.Result.(string)
-
-				c.ChObj <- ObjMessage{TYPE_TXN_HASH, txHash, nil}
-			} else {
-				var Header BlockHeader
-				response.Params.Result = &Header
-
+			go func(message []byte) error {
+				//	fmt.Printf("Message: %s\n", message)
 				err = json.Unmarshal(message, &response)
 				if err != nil {
-					return fmt.Errorf("Could not decode message/parse json: %v", err)
+					return fmt.Errorf("Could not decode message/parse json: %v, message %s", err, message)
+				}
+				if response.Params.Result == nil {
+
+					return nil
 				}
 
-				bgInt, err := hexutil.DecodeBig(Header.Number)
-				if err != nil {
-					return fmt.Errorf("Could not decode block number: %v", err)
-				}
+				if response.Params.Subscription == subHashTransactions {
+					txHash := response.Params.Result.(string)
 
-				c.ChObj <- ObjMessage{TYPE_BLOCK_HASH, Header.Hash, bgInt}
-			}
-			return nil
-		}(message)
+					c.ChObj <- ObjMessage{TYPE_TXN_HASH, txHash, nil}
+				} else {
+					var Header BlockHeader
+					response.Params.Result = &Header
+
+					err = json.Unmarshal(message, &response)
+					if err != nil {
+						return fmt.Errorf("Could not decode message/parse json: %v", err)
+					}
+
+					bgInt, err := hexutil.DecodeBig(Header.Number)
+					if err != nil {
+						return fmt.Errorf("Could not decode block number: %v", err)
+					}
+
+					c.ChObj <- ObjMessage{TYPE_BLOCK_HASH, Header.Hash, bgInt}
+				}
+				return nil
+			}(message)
+		}
 	}
 }
 
@@ -166,36 +174,96 @@ func (c *BscClient) StartWs() error {
 	u := url.URL{Scheme: "ws", Host: c.Cfg.BscHost + ":" + strconv.Itoa(c.Cfg.BscWsPort), Path: c.Cfg.BscWsPath}
 
 	for {
-		var err error
-		c.WSC, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
-		if err != nil {
-			return err
-		}
-		defer c.WSC.Close()
+		select {
+		case <-c.Ctx.Done():
+			//fmt.Printf("Context done StartWs\n")
+			return nil
 
-		c.initWs()
-		time.Sleep(5 * time.Second)
+		default:
+
+			var err error
+			c.WSC, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
+			if err != nil {
+				return err
+			}
+			defer c.WSC.Close()
+
+			c.initWs()
+			time.Sleep(5 * time.Second)
+		}
 	}
 
 }
 
 func (c *BscClient) Listener() {
+	defer func() {
+		if err := recover(); err != nil {
+			c.ChStatus = false
+			return
+		}
+	}()
+
 	for message := range c.ChObj {
-		switch message.Type {
-		case TYPE_BLOCK_HASH:
+		select {
+		case <-c.Ctx.Done():
+			//fmt.Printf("Context done Listener\n")
+			return
 
-			go func() {
-				_, txns, err := ReadBlock(c.C, message.Hash, nil)
-				if err != nil {
-					//continue
-					return
-				}
+		default:
+			switch message.Type {
+			case TYPE_BLOCK_HASH:
 
-				for _, txn := range txns {
-					if txn.Amount == nil || txn.Amount == big.NewInt(0) {
-						continue
+				go func() {
+					defer func() {
+						if err := recover(); err != nil {
+							c.ChStatus = false
+							return
+						}
+					}()
+
+					_, txns, err := ReadBlock(c.C, message.Hash, nil)
+					if err != nil {
+						//continue
+						return
 					}
+
+					for _, txn := range txns {
+						if txn.Amount == nil || txn.Amount == big.NewInt(0) {
+							continue
+						}
+						amount := decimal.NewFromBigInt(txn.Amount, 0)
+						if amount.IsZero() {
+							return
+						}
+						t := Transaction{}
+						t.Type = 1
+						if txn.ContractAddress != "" {
+							t.Type = 2
+						}
+						t.Raw = txn
+						t.TxId = txn.TxHash
+						t.Address = txn.AddressFrom
+						t.AddressTo = txn.AddressTo
+						t.Amount = amount
+						t.Contract = txn.ContractAddress
+						t.IsPending = txn.IsPending
+						//fmt.Println("Block: Sending to channel Transaction", txn)
+						c.Ch <- t
+					}
+				}()
+
+			case TYPE_TXN_HASH:
+
+				go func() {
+					txn, err := c.ReadTransaction(message.Hash)
+					if err != nil || txn.Amount == nil || txn.Amount == big.NewInt(0) {
+						return
+					}
+					//fmt.Println("Trans: Sending to channel Transaction", txn)
 					amount := decimal.NewFromBigInt(txn.Amount, 0)
+					if amount.IsZero() {
+						return
+					}
 					t := Transaction{}
 					t.Type = 1
 					if txn.ContractAddress != "" {
@@ -208,39 +276,14 @@ func (c *BscClient) Listener() {
 					t.Amount = amount
 					t.Contract = txn.ContractAddress
 					t.IsPending = txn.IsPending
-					//fmt.Println("Block: Sending to channel Transaction", txn)
+					//t.ContractData, _ = c.GetContractData(txn.ContractAddress)
+					//fmt.Println("Transaction: Sending to channel Transaction", t)
 					c.Ch <- t
-				}
-			}()
+				}()
 
-		case TYPE_TXN_HASH:
+			default:
 
-			go func() {
-				txn, err := c.ReadTransaction(message.Hash)
-				if err != nil || txn.Amount == nil || txn.Amount == big.NewInt(0) {
-					return
-				}
-				//fmt.Println("Trans: Sending to channel Transaction", txn)
-				amount := decimal.NewFromBigInt(txn.Amount, 0)
-				t := Transaction{}
-				t.Type = 1
-				if txn.ContractAddress != "" {
-					t.Type = 2
-				}
-				t.Raw = txn
-				t.TxId = txn.TxHash
-				t.Address = txn.AddressFrom
-				t.AddressTo = txn.AddressTo
-				t.Amount = amount
-				t.Contract = txn.ContractAddress
-				t.IsPending = txn.IsPending
-				//t.ContractData, _ = c.GetContractData(txn.ContractAddress)
-				//fmt.Println("Transaction: Sending to channel Transaction", t)
-				c.Ch <- t
-			}()
-
-		default:
-
+			}
 		}
 
 	}
@@ -274,17 +317,31 @@ type BscClient struct {
 	//	ChNotify  chan NotifyMessage
 	Mu        *sync.RWMutex
 	Contracts map[string]Contract
+	Ctx       context.Context
+	CancelCtx context.CancelFunc
 }
 
 func shirnk(c *BscClient, size int) {
 	for {
-		if len(c.Ch) > size {
-			<-c.Ch
-		}
-		if len(c.ChObj) > size {
-			<-c.ChObj
-		}
+		select {
+		case <-c.Ctx.Done():
+			//fmt.Printf("Context done shirnk\n")
+			return
 
+		default:
+			if len(c.Ch) > size {
+				for i := 0; i < len(c.Ch)-size; i++ {
+					<-c.Ch
+				}
+
+			}
+			if len(c.ChObj) > size {
+				for i := 0; i < len(c.ChObj)-size; i++ {
+					<-c.ChObj
+				}
+			}
+
+		}
 	}
 
 }
@@ -332,6 +389,9 @@ func Client(cfg *Config) (*BscClient, error) {
 
 	BscClient.Mu = &sync.RWMutex{}
 	BscClient.Contracts = make(map[string]Contract)
+	ctx, cancel := context.WithCancel(context.Background())
+	BscClient.Ctx = ctx
+	BscClient.CancelCtx = cancel
 
 	BscClient.Ch = make(chan Transaction, 1024)
 	BscClient.ChObj = make(chan ObjMessage, 1024)
@@ -341,6 +401,16 @@ func Client(cfg *Config) (*BscClient, error) {
 	return &BscClient, nil
 }
 
+func (c *BscClient) StopListener() {
+	//fmt.Println("StopListener")
+	c.ChStatus = false
+	c.CancelCtx()
+	time.Sleep(1 * time.Second)
+	shirnk(c, 0)
+	close(c.Ch)
+	close(c.ChObj)
+
+}
 func (c *BscClient) StartListener() {
 
 	go c.StartWs()
