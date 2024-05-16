@@ -407,8 +407,8 @@ func (c *BscClient) StopListener() {
 	c.CancelCtx()
 	time.Sleep(1 * time.Second)
 	shirnk(c, 0)
-	close(c.Ch)
-	close(c.ChObj)
+	//close(c.Ch)
+	//close(c.ChObj)
 
 }
 func (c *BscClient) StartListener() {
