@@ -218,6 +218,13 @@ func (c *TronClient) StartListener() (chan Transaction, error) {
 				}
 
 				go func(msg string) {
+					defer func() {
+						if err := recover(); err != nil {
+							c.ChStatus = false
+							return
+						}
+					}()
+
 					t := Transaction{}
 					contents := Message{}
 					if err := json.Unmarshal([]byte(msg), &contents); err != nil {
