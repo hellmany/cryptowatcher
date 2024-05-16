@@ -60,3 +60,30 @@ type Contract struct {
 ```
 
 Example in main.go
+
+
+Reading from channel
+```
+	for tx := range cBsc.Ch {
+		fmt.Printf("Received transaction %d '%s' '%s' '%s' '%s' '%s'\n", tx.Type, tx.TxId, tx.Address, tx.AddressTo, tx.Amount.String(), tx.Contract)
+	}
+```
+
+Example:
+```
+Received transaction 2 '0x24f2dff84b0e1ecff758ac604430d570cf69af30d31e8b1956e5154d68944c89' '0x214E596200B99c9c0e8a92b92FABd86535eA1eE9' '0xC36750db3bAf87D9B92FD7f70A75Cf0cCbd03712' '1001581293' 0x1236a887ef31B4d32E1F0a2b5e4531F52CeC7E75
+```
+
+and 
+
+```
+cData, err := cBsc.GetContractData("0x55d398326f99059ff775485246999027b3197955")
+	if err != nil {
+		fmt.Printf("Error getting contract data: %s\n", err)
+	}
+	fmt.Printf("Contract data %+v\n", cData)
+```
+Response
+```
+Contract data &{Decimals:18 Symbol:USDT Name:Tether USD}
+```
