@@ -405,10 +405,11 @@ func (c *BscClient) StopListener() {
 	//fmt.Println("StopListener")
 	c.ChStatus = false
 	c.CancelCtx()
-	time.Sleep(1 * time.Second)
+	time.Sleep(5 * time.Second)
 	shirnk(c, 0)
-	//close(c.Ch)
-	//close(c.ChObj)
+	time.Sleep(5 * time.Second)
+	close(c.Ch)
+	close(c.ChObj)
 
 }
 func (c *BscClient) StartListener() {

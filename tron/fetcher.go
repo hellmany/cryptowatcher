@@ -149,7 +149,12 @@ func (c *TronClient) GetContractData(contract string) (*Contract, error) {
 
 func (c *TronClient) StopListener() {
 	c.ChStatus = false
+	c.CancelCtx()
+	time.Sleep(5 * time.Second)
+	shirnk(c, 0)
+	time.Sleep(5 * time.Second)
 	close(c.Ch)
+
 }
 func shirnk(c *TronClient, size int) {
 	for {
