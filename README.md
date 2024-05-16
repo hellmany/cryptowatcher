@@ -1,6 +1,7 @@
 # cryptowatcher
 Real-time tron/bsc blockchain parser
-A module for real-time transaction analysis on the tron blockchain.
+
+A module for real-time transaction analysis on the tron/bsc blockchains.
 
 You get a stream with transaction data such as sender, receiver, contract and amount.
 
@@ -34,6 +35,31 @@ type Contract struct {
 	Symbol string
 	Name string
 }
+```
+
+example:
+
+```
+		cfg := tron.Config{
+			GrpcHost: "127.0.0.1",
+			GrpcPort: 50051,
+			ZeroMQ:   "tcp://127.0.0.1:5555",
+			//Contracts: []string{"TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"},
+		}
+
+		c, err := tron.Client(&cfg)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		_, err = c.StartListener()
+		if err != nil {
+			log.Fatal(err)
+		}
+		for _ = range c.Ch {
+					fmt.Printf("Received transaction %d '%s' '%s' '%s' '%s' '%s'\n", tx.Type, tx.TxId, tx.Address, tx.AddressTo, tx.Amount.String(), tx.Contract)
+		
+			}
 ```
 
 # For Bsc
@@ -88,6 +114,37 @@ Response
 Contract data &{Decimals:18 Symbol:USDT Name:Tether USD}
 ```
 
+Example
 
+```
+	cfgBsc := bsc.Config{
+		BscHost:   "127.0.0.1",
+		BscPort:   8545,
+		BscWsPort: 8546,
+		BscWsPath: "/",
+	
+	}
+
+	cBsc, err := bsc.Client(&cfgBsc)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	cBsc.StartListener()
+
+	
+	
+	cData, err := cBsc.GetContractData("0x55d398326f99059ff775485246999027b3197955")
+	if err != nil {
+		fmt.Printf("Error getting contract data: %s\n", err)
+	}
+	fmt.Printf("Contract data %+v\n", cData)
+
+	for _ = range cBsc.Ch {
+
+					fmt.Printf("Received transaction %d '%s' '%s' '%s' '%s' '%s'\n", tx.Type, tx.TxId, tx.Address, tx.AddressTo, tx.Amount.String(), tx.Contract)
+		
+	}
+```
 Made for self-usage, but PR welcomes.
 yk@rbmedia.io
