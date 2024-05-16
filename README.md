@@ -87,3 +87,7 @@ Response
 ```
 Contract data &{Decimals:18 Symbol:USDT Name:Tether USD}
 ```
+
+
+Made for self-usage, but PR welcomes.
+yk@rbmedia.io
